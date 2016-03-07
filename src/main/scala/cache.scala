@@ -1061,7 +1061,10 @@ class L2WritebackUnit(trackerId: Int)(implicit p: Parameters) extends L2XactTrac
 
   val xact = Reg(new L2WritebackReq)
   val data_buffer = Reg(init=Vec.fill(innerDataBeats)(UInt(0, width = innerDataBits)))
-  val xact_addr_block = Cat(xact.tag, xact.idx, UInt(cacheId, cacheIdBits))
+  val xact_addr_block = if (cacheIdBits == 0)
+                          Cat(xact.tag, xact.idx)
+                        else
+                          Cat(xact.tag, xact.idx, UInt(cacheId, cacheIdBits))
 
   val pending_irels =
     connectTwoWayBeatCounter(max = io.inner.tlNCachingClients, up = io.inner.probe, down = io.inner.release)._1
