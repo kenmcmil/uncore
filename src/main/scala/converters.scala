@@ -199,6 +199,7 @@ object ManagerTileLinkHeaderCreator {
   */
 trait HasDataBeatCounters {
   type HasBeat = TileLinkChannel with HasTileLinkBeatId
+  type HasId = TileLinkChannel with HasClientId
 
   /** Returns the current count on this channel and when a message is done
     * @param inc increment the counter (usually .valid or .fire())
@@ -259,11 +260,12 @@ trait HasDataBeatCounters {
       up: DecoupledIO[T],
       down: DecoupledIO[S],
       beat: UInt = UInt(0),
-      track: T => Bool = (t: T) => Bool(true)): (Bool, UInt, Bool, UInt, Bool) = {
+      trackUp: T => Bool = (t: T) => Bool(true),
+      trackDown: S => Bool = (s: S) => Bool(true)): (Bool, UInt, Bool, UInt, Bool) = {
     val (up_idx, up_done) = connectDataBeatCounter(up.fire(), up.bits, beat)
     val (down_idx, down_done) = connectDataBeatCounter(down.fire(), down.bits, beat)
-    val do_inc = up_done && track(up.bits)
-    val do_dec = down_done
+    val do_inc = up_done && trackUp(up.bits)
+    val do_dec = down_done && trackDown(down.bits)
     val cnt = TwoWayCounter(do_inc, do_dec, max)
     (cnt > UInt(0), up_idx, up_done, down_idx, down_done)
   }
@@ -274,12 +276,6 @@ class ClientTileLinkIOUnwrapper(implicit p: Parameters) extends TLModule()(p) {
     val in = new ClientTileLinkIO().flip
     val out = new ClientUncachedTileLinkIO
   }
-
-  def needsRoqEnq(channel: HasTileLinkData): Bool =
-    !channel.hasMultibeatData() || channel.addr_beat === UInt(0)
-
-  def needsRoqDeq(channel: HasTileLinkData): Bool =
-    !channel.hasMultibeatData() || channel.addr_beat === UInt(tlDataBeats - 1)
 
   val acqArb = Module(new LockingRRArbiter(new Acquire, 2, tlDataBeats,
     Some((acq: Acquire) => acq.hasMultibeatData())))
@@ -294,8 +290,8 @@ class ClientTileLinkIOUnwrapper(implicit p: Parameters) extends TLModule()(p) {
   val irel = io.in.release.bits
   val ognt = io.out.grant.bits
 
-  val acq_roq_enq = needsRoqEnq(iacq)
-  val rel_roq_enq = needsRoqEnq(irel)
+  val acq_roq_enq = iacq.first()
+  val rel_roq_enq = irel.first()
 
   val acq_roq_ready = !acq_roq_enq || acqRoq.io.enq.ready
   val rel_roq_ready = !rel_roq_enq || relRoq.io.enq.ready
@@ -342,10 +338,10 @@ class ClientTileLinkIOUnwrapper(implicit p: Parameters) extends TLModule()(p) {
 
   io.out.acquire <> acqArb.io.out
 
-  acqRoq.io.deq.valid := io.out.grant.fire() && needsRoqDeq(ognt)
+  acqRoq.io.deq.valid := io.out.grant.fire() && ognt.last()
   acqRoq.io.deq.tag := ognt.client_xact_id
 
-  relRoq.io.deq.valid := io.out.grant.fire() && needsRoqDeq(ognt)
+  relRoq.io.deq.valid := io.out.grant.fire() && ognt.last()
   relRoq.io.deq.tag := ognt.client_xact_id
 
   val gnt_builtin = acqRoq.io.deq.data
@@ -500,6 +496,7 @@ class NastiIOTileLinkIOConverter(implicit p: Parameters) extends TLModule()(p)
     manager_xact_id = UInt(0),
     addr_beat = Mux(roq.io.deq.data.subblock, roq.io.deq.data.addr_beat, tl_cnt_in),
     data = r_aligned_data)
+  assert(!gnt_arb.io.in(0).valid || roq.io.deq.matches, "NASTI tag error")
 
   gnt_arb.io.in(1).valid := io.nasti.b.valid
   io.nasti.b.ready := gnt_arb.io.in(1).ready
