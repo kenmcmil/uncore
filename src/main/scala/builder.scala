@@ -48,7 +48,8 @@ class DefaultL2Config extends Config (
           maxClientXacts = here[Int]("MAX_CLIENT_XACTS"),
           maxClientsPerPort = here[Int]("MAX_CLIENTS_PER_PORT"),
           maxManagerXacts = site(NAcquireTransactors) + 2,
-          dataBits = site(CacheBlockBytes)*8)
+          dataBits = site(CacheBlockBytes)*8,
+          dataBeats = 2)
       case TLKey("L2toMC") => 
         TileLinkParameters(
           coherencePolicy = new MEICoherence(new NullRepresentation(1)),
@@ -58,7 +59,8 @@ class DefaultL2Config extends Config (
           maxClientXacts = 1,
           maxClientsPerPort = site(NAcquireTransactors) + 2,
           maxManagerXacts = 1,
-          dataBits = site(CacheBlockBytes)*8)
+          dataBits = site(CacheBlockBytes)*8,
+          dataBeats = 2)
       case CacheBlockBytes => 64
       case CacheBlockOffsetBits => log2Up(here(CacheBlockBytes))
       case NSets => Knob("L2_SETS")
@@ -71,10 +73,13 @@ class DefaultL2Config extends Config (
       case L2Replacer => () => new SeqRandom(site(NWays))
       case ECCCode => None
       case AmoAluOperandBits => 64
+ //     case XLen => 128
   }},
   knobValues = {
-    case "L2_WAYS" => 8
+    case "L2_WAYS" => 1
     case "L2_SETS" => 1024
+    case "NTILES" => 2
+    case "L2_CAPACITY_IN_KB" => 256
   }
 )
 
