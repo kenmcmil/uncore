@@ -73,6 +73,7 @@ class DefaultL2Config extends Config (
       case L2Replacer => () => new SeqRandom(site(NWays))
       case ECCCode => None
       case AmoAluOperandBits => 64
+      case SplitMetadata => false
  //     case XLen => 128
   }},
   knobValues = {
