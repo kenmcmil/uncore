@@ -746,7 +746,6 @@ class L2AcquireTracker(trackerId: Int)(implicit p: Parameters) extends L2XactTra
                           wmask & Mux(xact.isBuiltInType(Acquire.putAtomicType),
                                         amoalu.io.out << (xact_amo_shift_bytes << 3),
                                         new_data)
-    wmask_buffer(beat) := ~UInt(0, wmask_buffer.head.getWidth)
     when(xact.is(Acquire.putAtomicType) && xact.addr_beat === beat) { amo_result := old_data }
   }
 
@@ -954,7 +953,7 @@ class L2AcquireTracker(trackerId: Int)(implicit p: Parameters) extends L2XactTra
   io.data.write.bits.way_en := xact_way_en
   io.data.write.bits.addr_idx := xact_addr_idx
   io.data.write.bits.addr_beat := curr_write_beat
-  io.data.write.bits.wmask := wmask_buffer(curr_write_beat)
+  io.data.write.bits.wmask := SInt(-1) // Always writes a full beat
   io.data.write.bits.data := data_buffer(curr_write_beat)
 
   // soon as the data is released, granted, put, or read from the cache
