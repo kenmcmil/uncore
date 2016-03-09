@@ -67,6 +67,7 @@ class DefaultL2Config extends Config (
       case NWays => Knob("L2_WAYS")
       case RowBits => site(TLKey(site(TLId))).dataBitsPerBeat
       case CacheIdBits => 1
+      case L2StoreDataQueueDepth => 1
       case NAcquireTransactors => 2
       case NSecondaryMisses => 4
       case L2DirectoryRepresentation => new FullRepresentation(here[Int]("N_CACHED"))
