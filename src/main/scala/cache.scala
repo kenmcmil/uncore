@@ -422,8 +422,6 @@ class TSHRFile(implicit p: Parameters) extends L2HellaCacheModule()(p)
     trackerList.map(_.io.alloc.iacq),
     allocOverride = !irel_vs_iacq_conflict)
 
-  assert(PopCount(trackerList.map(_.io.matches.iacq)) <= UInt(1),
-    "At most a single busy tracker should match for any given Acquire")
   assert(PopCount(trackerList.map(_.io.alloc.iacq)) <= UInt(1),
     "At most a single tracker should now be allocated for any given Acquire")
 
@@ -971,7 +969,7 @@ class L2AcquireTracker(trackerId: Int)(implicit p: Parameters) extends L2XactTra
                          pending_writes.orR ||
                          pending_ognt)
 
-  ignt_q.io.deq.ready := ignt_data_done
+  ignt_q.io.deq.ready := !pending_vol_ignt && ignt_data_done
   io.inner.grant.valid := pending_vol_ignt ||
                             (state === s_busy &&
                             ignt_q.io.deq.valid &&

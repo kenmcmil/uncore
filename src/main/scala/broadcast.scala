@@ -52,7 +52,9 @@ class L2BroadcastHub(implicit p: Parameters) extends ManagerCoherenceAgent()(p)
   val sdq_val = Reg(init=Bits(0, sdqDepth))
   val sdq_alloc_id = PriorityEncoder(~sdq_val)
   val sdq_rdy = !sdq_val.andR
-  val sdq_enq = trackerList.map(_.io.alloc.iacq).reduce(_||_) && io.iacq().hasData()
+  val sdq_enq = trackerList.map(_.io.alloc.iacq).reduce(_||_) &&
+                  io.inner.acquire.fire() &&
+                  io.iacq().hasData() 
   when (sdq_enq) { sdq(sdq_alloc_id) := io.iacq().data }
 
   // Handle acquire transaction initiation
@@ -175,7 +177,7 @@ class BroadcastVoluntaryReleaseTracker(trackerId: Int)
 
   // These IOs are used for routing in the parent
   io.matches.iacq := (state =/= s_idle) && xact.conflicts(io.iacq())
-  io.matches.irel := (state =/= s_idle) && xact.conflicts(io.irel())
+  io.matches.irel := (state =/= s_idle) && xact.conflicts(io.irel()) && io.irel().isVoluntary()
   io.matches.oprb := Bool(false)
 
   // Checks for illegal behavior
@@ -217,7 +219,7 @@ class BroadcastAcquireTracker(trackerId: Int)
 
   // These IOs are used for routing in the parent
   io.matches.iacq := (state =/= s_idle) && xact.conflicts(io.iacq())
-  io.matches.irel := (state =/= s_idle) && xact.conflicts(io.irel())
+  io.matches.irel := (state =/= s_idle) && xact.conflicts(io.irel()) && !io.irel().isVoluntary()
   io.matches.oprb := Bool(false)
 
   val outerParams = p.alterPartial({ case TLId => outerTLId })
@@ -326,7 +328,7 @@ class BroadcastAcquireTracker(trackerId: Int)
       }
 
       // Handle releases, which may have data to be written back
-      val matches = xact.conflicts(io.irel()) && !io.irel().isVoluntary()
+      val matches = io.matches.irel 
       io.inner.release.ready := (!io.irel().hasData() || io.outer.acquire.ready) && matches
       when(io.inner.release.valid && matches) {
         when(io.irel().hasData()) {
