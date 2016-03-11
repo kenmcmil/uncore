@@ -186,6 +186,8 @@ trait HasL2HellaCacheParameters extends HasCacheParameters with HasCoherenceAgen
   val idxLSB = cacheIdBits
   val idxMSB = idxLSB + idxBits - 1
   val tagLSB = idxLSB + idxBits
+  def inSameSet(addr1: UInt, addr2: UInt): Bool = addr1(idxMSB,idxLSB) === addr2(idxMSB,idxLSB)
+  def haveSameTag(addr1: UInt, addr2: UInt): Bool = addr1 >> UInt(tagLSB) === addr2 >> UInt(tagLSB)
   //val blockAddrBits = p(TLBlockAddrBits)
   val refillCyclesPerBeat = outerDataBits/rowBits
   val refillCycles = refillCyclesPerBeat*outerDataBeats
@@ -412,7 +414,7 @@ class TSHRFile(implicit p: Parameters) extends L2HellaCacheModule()(p)
   val irel_vs_iacq_conflict =
         io.inner.acquire.valid &&
         io.inner.release.valid &&
-        io.inner.acquire.bits.addr_block === io.inner.release.bits.addr_block
+        inSameSet(io.inner.acquire.bits.addr_block, io.inner.release.bits.addr_block)
   doInputRoutingWithAllocation(
     io.inner.acquire,
     trackerList.map(_.io.inner.acquire),
@@ -533,7 +535,7 @@ class L2VoluntaryReleaseTracker(trackerId: Int)(implicit p: Parameters) extends 
       pending_ignt)
 
   // These IOs are used for routing in the parent
-  io.matches.iacq := (state =/= s_idle) && io.iacq().conflicts(xact)
+  io.matches.iacq := (state =/= s_idle) && inSameSet(io.iacq().addr_block, xact.addr_block)
   io.matches.irel := (state =/= s_idle) && io.irel().conflicts(xact)
   io.matches.oprb := (state =/= s_idle) && io.oprb().conflicts(xact)
 
@@ -784,8 +786,8 @@ class L2AcquireTracker(trackerId: Int)(implicit p: Parameters) extends L2XactTra
   }
 
   // These IOs are used for routing in the parent
-  val iacq_in_same_set = xact_addr_idx === io.iacq().addr_block(idxMSB,idxLSB)
-  val irel_in_same_set = xact_addr_idx === io.irel().addr_block(idxMSB,idxLSB)
+  val iacq_in_same_set = inSameSet(xact_addr_idx, io.iacq().addr_block)
+  val irel_in_same_set = inSameSet(xact_addr_idx,io.irel().addr_block)
   val before_wb_alloc = Vec(s_meta_read, s_meta_resp, s_wb_req).contains(state)
   io.matches.iacq := (state =/= s_idle) && iacq_in_same_set
   io.matches.irel := (state =/= s_idle) && 

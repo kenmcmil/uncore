@@ -52,7 +52,7 @@ class L2BroadcastHub(implicit p: Parameters) extends ManagerCoherenceAgent()(p)
   val sdq_val = Reg(init=Bits(0, sdqDepth))
   val sdq_alloc_id = PriorityEncoder(~sdq_val)
   val sdq_rdy = !sdq_val.andR
-  val sdq_enq = io.inner.acquire.fire() && io.iacq().hasData()
+  val sdq_enq = trackerList.map(_.io.alloc.iacq).reduce(_||_) && io.iacq().hasData()
   when (sdq_enq) { sdq(sdq_alloc_id) := io.iacq().data }
 
   // Handle acquire transaction initiation
@@ -80,10 +80,10 @@ class L2BroadcastHub(implicit p: Parameters) extends ManagerCoherenceAgent()(p)
                        (if(i < nReleaseTransactors) inVolWBQueue
                         else inClientReleaseQueue)).toBits))
   doInputRoutingWithAllocation(
-    io.inner.acquire,
-    trackerList.map(_.io.inner.acquire),
-    trackerList.map(_.io.matches.iacq),
-    trackerList.map(_.io.alloc.iacq),
+    io.inner.release,
+    trackerList.map(_.io.inner.release),
+    trackerList.map(_.io.matches.irel),
+    trackerList.map(_.io.alloc.irel),
     Some(vwbqLoc))
 
   // Wire probe requests and grant reply to clients, finish acks from clients
