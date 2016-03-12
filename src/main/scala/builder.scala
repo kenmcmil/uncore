@@ -35,8 +35,8 @@ class DefaultL2Config extends Config (
       case TLId => "L1toL2"
       case InnerTLId => "L1toL2"
       case OuterTLId => "L2toMC"
-      case "N_CACHED" => 2
-      case "N_UNCACHED" => 0
+      case "N_CACHED" => 1
+      case "N_UNCACHED" => 1
       case "MAX_CLIENT_XACTS" => 4
       case "MAX_CLIENTS_PER_PORT" => 2
       case TLKey("L1toL2") => 
