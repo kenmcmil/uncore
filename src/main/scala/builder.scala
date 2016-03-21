@@ -1,10 +1,10 @@
 package uncore
 
 import Chisel._
-import cde.{Config, Parameters, Knob}
+import cde.{Config, Parameters, ParameterDump, Knob, Dump}
 import junctions.PAddrBits
 
-object UncoreBuilder extends App {
+object UncoreBuilder extends App with FileSystemUtilities {
   val topModuleName = args(0)
   val configClassName = args(1)
   val config = try {
@@ -24,6 +24,11 @@ object UncoreBuilder extends App {
       .asInstanceOf[Module]
 
   chiselMain.run(args.drop(2), gen)
+
+  val pdFile = createOutputFile(s"$topModuleName.prm")
+  pdFile.write(ParameterDump.getDump)
+  pdFile.close
+
 }
 
 class DefaultL2Config extends Config (
@@ -68,7 +73,7 @@ class DefaultL2Config extends Config (
       case RowBits => site(TLKey(site(TLId))).dataBitsPerBeat
       case CacheIdBits => 1
       case L2StoreDataQueueDepth => 1
-      case NAcquireTransactors => 2
+      case NAcquireTransactors => Dump("N_ACQUIRE_TRANSACTORS",1)
       case NSecondaryMisses => 4
       case L2DirectoryRepresentation => new FullRepresentation(here[Int]("N_CACHED"))
       case L2Replacer => () => new SeqRandom(site(NWays))
