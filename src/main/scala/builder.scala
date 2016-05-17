@@ -40,10 +40,11 @@ class DefaultL2Config extends Config (
       case TLId => "L1toL2"
       case InnerTLId => "L1toL2"
       case OuterTLId => "L2toMC"
-      case "N_CACHED" => 2
-      case "N_UNCACHED" => 1
+      case "N_CACHED" => Dump("N_CACHED",here[Int]("CACHED_CLIENTS_PER_PORT"))
+      case "N_UNCACHED" => Dump("N_UNCACHED",here[Int]("MAX_CLIENTS_PER_PORT") - here[Int]("N_CACHED"))
       case "MAX_CLIENT_XACTS" => 4
-      case "MAX_CLIENTS_PER_PORT" => 1
+      case "MAX_CLIENTS_PER_PORT" => Knob("NTILES")
+      case "CACHED_CLIENTS_PER_PORT" => Knob("N_CACHED_TILES")
       case TLKey("L1toL2") => 
         TileLinkParameters(
           coherencePolicy = new MESICoherence(site(L2DirectoryRepresentation)),
@@ -68,10 +69,11 @@ class DefaultL2Config extends Config (
           dataBeats = 2)
       case CacheBlockBytes => 64
       case CacheBlockOffsetBits => log2Up(here(CacheBlockBytes))
-      case NSets => Knob("L2_SETS")
+      case "L2_SETS" => Knob("L2_SETS") 
+      case NSets => Dump("L2_SETS",here[Int]("L2_SETS"))
       case NWays => Knob("L2_WAYS")
       case RowBits => site(TLKey(site(TLId))).dataBitsPerBeat
-      case CacheIdBits => 1
+      case CacheIdBits => Dump("CACHE_ID_BITS",1)
       case L2StoreDataQueueDepth => 1
       case NAcquireTransactors => Dump("N_ACQUIRE_TRANSACTORS",2)
       case NSecondaryMisses => 4
@@ -86,6 +88,7 @@ class DefaultL2Config extends Config (
     case "L2_WAYS" => 1
     case "L2_SETS" => 1024
     case "NTILES" => 2
+    case "N_CACHED_TILES" => 2
     case "L2_CAPACITY_IN_KB" => 256
   }
 )
@@ -101,4 +104,11 @@ class With1L2Ways extends Config(knobValues = { case "L2_WAYS" => 1 })
 class With2L2Ways extends Config(knobValues = { case "L2_WAYS" => 2 })
 class With4L2Ways extends Config(knobValues = { case "L2_WAYS" => 4 })
 
-class W1L2Config extends Config(new With1L2Ways ++ new DefaultL2Config)
+class With1Cached extends Config(knobValues = { case "N_CACHED_TILES" => 1 })
+class With2Cached extends Config(knobValues = { case "N_CACHED_TILES" => 2 })
+
+
+class W1Cached1WaysConfig extends Config(new With1L2Ways ++ new With1Cached ++ new DefaultL2Config)
+class W1Cached2WaysConfig extends Config(new With2L2Ways ++ new With1Cached ++ new DefaultL2Config)
+class W2Cached1WaysConfig extends Config(new With1L2Ways ++ new With2Cached ++ new DefaultL2Config)
+class W2Cached2WaysConfig extends Config(new With2L2Ways ++ new With2Cached ++ new DefaultL2Config)
