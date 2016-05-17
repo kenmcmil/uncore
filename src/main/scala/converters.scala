@@ -78,10 +78,10 @@ class FinishUnit(srcId: Int = 0, outstanding: Int = 2)(implicit p: Parameters) e
     val q = Module(new FinishQueue(outstanding))
     q.io.enq.valid := io.grant.fire() && g.requiresAck() && (!g.hasMultibeatData() || done)
     q.io.enq.bits := g.makeFinish()
-    q.io.enq.bits.client_id := io.grant.bits.header.src
+    q.io.enq.bits.manager_id := io.grant.bits.header.src
 
     io.finish.bits.header.src := UInt(srcId)
-    io.finish.bits.header.dst := q.io.deq.bits.client_id
+    io.finish.bits.header.dst := q.io.deq.bits.manager_id
     io.finish.bits.payload := q.io.deq.bits
     io.finish.valid := q.io.deq.valid
     q.io.deq.ready := io.finish.ready
@@ -123,7 +123,7 @@ class ClientTileLinkNetworkPort(clientId: Int, addrConvert: UInt => UInt)
   io.network.release <> rel_with_header
   io.network.finish <> fin_with_header
   io.client.probe <> prb_without_header
-  io.client.grant.bits.client_id := io.network.grant.bits.header.src
+  io.client.grant.bits.manager_id := io.network.grant.bits.header.src
   io.client.grant <> gnt_without_header
 }
 
@@ -159,14 +159,14 @@ class ClientUncachedTileLinkNetworkPort(clientId: Int, addrConvert: UInt => UInt
 }
 
 object ClientTileLinkHeaderCreator {
-  def apply[T <: ClientToManagerChannel with HasClientId](
+  def apply[T <: ClientToManagerChannel with HasManagerId](
         in: DecoupledIO[T],
         clientId: Int)
       (implicit p: Parameters): DecoupledIO[LogicalNetworkIO[T]] = {
     val out = Wire(new DecoupledIO(new LogicalNetworkIO(in.bits)))
     out.bits.payload := in.bits
     out.bits.header.src := UInt(clientId)
-    out.bits.header.dst := in.bits.client_id
+    out.bits.header.dst := in.bits.manager_id
     out.valid := in.valid
     in.ready := out.ready
     out
@@ -204,10 +204,10 @@ class ManagerTileLinkNetworkPort(managerId: Int, idConvert: UInt => UInt)
   }
   io.network.grant <> ManagerTileLinkHeaderCreator(io.manager.grant, managerId, (u: UInt) => u)
   io.network.probe <> ManagerTileLinkHeaderCreator(io.manager.probe, managerId, idConvert)
-  io.manager.acquire.bits.client_id := io.network.acquire.bits.header.src
   io.manager.acquire <> DecoupledLogicalNetworkIOUnwrapper(io.network.acquire)
-  io.manager.release.bits.client_id := io.network.release.bits.header.src
+  io.manager.acquire.bits.client_id := io.network.acquire.bits.header.src
   io.manager.release <> DecoupledLogicalNetworkIOUnwrapper(io.network.release)
+  io.manager.release.bits.client_id := io.network.release.bits.header.src
   io.manager.finish <> DecoupledLogicalNetworkIOUnwrapper(io.network.finish)
 }
 
@@ -406,9 +406,68 @@ class ClientTileLinkIOUnwrapper(implicit p: Parameters) extends TLModule()(p) {
   io.in.probe.valid := Bool(false)
 }
 
+class NastiIOTileLinkIOIdMapper(implicit val p: Parameters) extends Module
+    with HasTileLinkParameters with HasNastiParameters {
+  val io = new Bundle {
+    val req = new Bundle {
+      val valid = Bool(INPUT)
+      val ready = Bool(OUTPUT)
+      val tl_id = UInt(INPUT, tlClientXactIdBits)
+      val nasti_id = UInt(OUTPUT, nastiXIdBits)
+    }
+    val resp = new Bundle {
+      val valid = Bool(INPUT)
+      val matches = Bool(OUTPUT)
+      val nasti_id = UInt(INPUT, nastiXIdBits)
+      val tl_id = UInt(OUTPUT, tlClientXactIdBits)
+    }
+  }
+  val tlMaxXacts = tlMaxClientXacts * tlMaxClientsPerPort
+
+  if (tlClientXactIdBits <= nastiXIdBits) {
+    io.req.ready := Bool(true)
+    io.req.nasti_id := io.req.tl_id
+    io.resp.matches := Bool(true)
+    io.resp.tl_id := io.resp.nasti_id
+  } else if (nastiXIdBits <= 2) {
+    val nQueues = 1 << nastiXIdBits
+    val entriesPerQueue = (tlMaxXacts - 1) / nQueues + 1
+    val (req_nasti_id, req_nasti_flip) = Counter(io.req.valid && io.req.ready, nQueues)
+    io.req.ready := Bool(false)
+    io.resp.matches := Bool(false)
+    io.resp.tl_id := UInt(0)
+    io.req.nasti_id := req_nasti_id
+    for (i <- 0 until nQueues) {
+      val queue = Module(new Queue(UInt(width = tlClientXactIdBits), entriesPerQueue))
+      queue.io.enq.valid := io.req.valid && req_nasti_id === UInt(i)
+      queue.io.enq.bits := io.req.tl_id
+      when (req_nasti_id === UInt(i)) { io.req.ready := queue.io.enq.ready }
+
+      queue.io.deq.ready := io.resp.valid && io.resp.nasti_id === UInt(i)
+      when (io.resp.nasti_id === UInt(i)) {
+        io.resp.matches := queue.io.deq.valid
+        io.resp.tl_id := queue.io.deq.bits
+      }
+    }
+  } else {
+    val maxNastiId = 1 << nastiXIdBits
+    val (req_nasti_id, req_nasti_flip) = Counter(io.req.valid && io.req.ready, maxNastiId)
+    val roq = Module(new ReorderQueue(
+      UInt(width = tlClientXactIdBits), nastiXIdBits, tlMaxXacts))
+    roq.io.enq.valid := io.req.valid
+    roq.io.enq.bits.data := io.req.tl_id
+    roq.io.enq.bits.tag := req_nasti_id
+    io.req.ready := roq.io.enq.ready
+    io.req.nasti_id := req_nasti_id
+    roq.io.deq.valid := io.resp.valid
+    roq.io.deq.tag := io.resp.nasti_id
+    io.resp.tl_id := roq.io.deq.data
+    io.resp.matches := roq.io.deq.matches
+  }
+}
+
 class NastiIOTileLinkIOConverterInfo(implicit p: Parameters) extends TLBundle()(p) {
   val addr_beat = UInt(width = tlBeatAddrBits)
-  val byteOff = UInt(width = tlByteAddrBits)
   val subblock = Bool()
 }
 
@@ -432,7 +491,6 @@ class NastiIOTileLinkIOConverter(implicit p: Parameters) extends TLModule()(p)
   val dataBits = tlDataBits*tlDataBeats 
   require(tlDataBits == nastiXDataBits, "Data sizes between LLC and MC don't agree") // TODO: remove this restriction
   require(tlDataBeats < (1 << nastiXLenBits), "Can't have that many beats")
-  require(tlClientXactIdBits <= nastiXIdBits, "NastiIO converter is going truncate tags: " + tlClientXactIdBits + " > " + nastiXIdBits)
 
   val has_data = io.tl.acquire.bits.hasData()
 
@@ -444,17 +502,26 @@ class NastiIOTileLinkIOConverter(implicit p: Parameters) extends TLModule()(p)
   val get_valid = io.tl.acquire.valid && !has_data
   val put_valid = io.tl.acquire.valid && has_data
 
+  val tlMaxXacts = tlMaxClientXacts * tlMaxClientsPerPort
+
   // Reorder queue saves extra information needed to send correct
   // grant back to TL client
   val roq = Module(new ReorderQueue(
-    new NastiIOTileLinkIOConverterInfo,
-    nastiRIdBits, tlMaxClientsPerPort))
+    new NastiIOTileLinkIOConverterInfo, nastiRIdBits, tlMaxXacts))
+
+  val get_id_mapper = Module(new NastiIOTileLinkIOIdMapper)
+  val put_id_mapper = Module(new NastiIOTileLinkIOIdMapper)
+
+  val get_id_ready = get_id_mapper.io.req.ready
+  val put_id_mask = is_subblock || io.tl.acquire.bits.addr_beat === UInt(0)
+  val put_id_ready = put_id_mapper.io.req.ready || !put_id_mask
 
   // For Get/GetBlock, make sure Reorder queue can accept new entry
   val get_helper = DecoupledHelper(
     get_valid,
     roq.io.enq.ready,
-    io.nasti.ar.ready)
+    io.nasti.ar.ready,
+    get_id_ready)
 
   val w_inflight = Reg(init = Bool(false))
 
@@ -464,7 +531,8 @@ class NastiIOTileLinkIOConverter(implicit p: Parameters) extends TLModule()(p)
   val put_helper = DecoupledHelper(
     put_valid,
     aw_ready,
-    io.nasti.w.ready)
+    io.nasti.w.ready,
+    put_id_ready)
 
   val (nasti_cnt_out, nasti_wrap_out) = Counter(
     io.nasti.r.fire() && !roq.io.deq.data.subblock, tlDataBeats)
@@ -472,15 +540,24 @@ class NastiIOTileLinkIOConverter(implicit p: Parameters) extends TLModule()(p)
   roq.io.enq.valid := get_helper.fire(roq.io.enq.ready)
   roq.io.enq.bits.tag := io.nasti.ar.bits.id
   roq.io.enq.bits.data.addr_beat := io.tl.acquire.bits.addr_beat
-  roq.io.enq.bits.data.byteOff := io.tl.acquire.bits.addr_byte()
   roq.io.enq.bits.data.subblock := is_subblock
   roq.io.deq.valid := io.nasti.r.fire() && (nasti_wrap_out || roq.io.deq.data.subblock)
   roq.io.deq.tag := io.nasti.r.bits.id
 
+  get_id_mapper.io.req.valid := get_helper.fire(get_id_ready)
+  get_id_mapper.io.req.tl_id := io.tl.acquire.bits.client_xact_id
+  get_id_mapper.io.resp.valid := io.nasti.r.fire() && io.nasti.r.bits.last
+  get_id_mapper.io.resp.nasti_id := io.nasti.r.bits.id
+
+  put_id_mapper.io.req.valid := put_helper.fire(put_id_ready, put_id_mask)
+  put_id_mapper.io.req.tl_id := io.tl.acquire.bits.client_xact_id
+  put_id_mapper.io.resp.valid := io.nasti.b.fire()
+  put_id_mapper.io.resp.nasti_id := io.nasti.b.bits.id
+
   // Decompose outgoing TL Acquires into Nasti address and data channels
   io.nasti.ar.valid := get_helper.fire(io.nasti.ar.ready)
   io.nasti.ar.bits := NastiReadAddressChannel(
-    id = io.tl.acquire.bits.client_xact_id,
+    id = get_id_mapper.io.req.nasti_id,
     addr = io.tl.acquire.bits.full_addr(),
     size = Mux(is_subblock,
       opSizeToXSize(io.tl.acquire.bits.op_size()),
@@ -489,13 +566,14 @@ class NastiIOTileLinkIOConverter(implicit p: Parameters) extends TLModule()(p)
 
   io.nasti.aw.valid := put_helper.fire(aw_ready, !w_inflight)
   io.nasti.aw.bits := NastiWriteAddressChannel(
-    id = io.tl.acquire.bits.client_xact_id,
+    id = put_id_mapper.io.req.nasti_id,
     addr = io.tl.acquire.bits.full_addr(),
     size = UInt(log2Ceil(tlDataBytes)),
     len = Mux(is_multibeat, UInt(tlDataBeats - 1), UInt(0)))
 
   io.nasti.w.valid := put_helper.fire(io.nasti.w.ready)
   io.nasti.w.bits := NastiWriteDataChannel(
+    id = put_id_mapper.io.req.nasti_id,
     data = io.tl.acquire.bits.data,
     strb = io.tl.acquire.bits.wmask(),
     last = tl_wrap_out || (io.tl.acquire.fire() && is_subblock))
@@ -518,31 +596,29 @@ class NastiIOTileLinkIOConverter(implicit p: Parameters) extends TLModule()(p)
   val gnt_arb = Module(new Arbiter(new GrantToDst, 2))
   io.tl.grant <> gnt_arb.io.out
 
-  val r_aligned_data = Mux(roq.io.deq.data.subblock,
-    io.nasti.r.bits.data << Cat(roq.io.deq.data.byteOff, UInt(0, 3)),
-    io.nasti.r.bits.data)
-
   gnt_arb.io.in(0).valid := io.nasti.r.valid
   io.nasti.r.ready := gnt_arb.io.in(0).ready
   gnt_arb.io.in(0).bits := Grant(
     is_builtin_type = Bool(true),
     g_type = Mux(roq.io.deq.data.subblock,
       Grant.getDataBeatType, Grant.getDataBlockType),
-    client_xact_id = io.nasti.r.bits.id,
+    client_xact_id = get_id_mapper.io.resp.tl_id,
     manager_xact_id = UInt(0),
     addr_beat = Mux(roq.io.deq.data.subblock, roq.io.deq.data.addr_beat, tl_cnt_in),
-    data = r_aligned_data)
+    data = io.nasti.r.bits.data)
   assert(!gnt_arb.io.in(0).valid || roq.io.deq.matches, "NASTI tag error")
+  assert(!gnt_arb.io.in(0).valid || get_id_mapper.io.resp.matches, "NASTI tag error")
 
   gnt_arb.io.in(1).valid := io.nasti.b.valid
   io.nasti.b.ready := gnt_arb.io.in(1).ready
   gnt_arb.io.in(1).bits := Grant(
     is_builtin_type = Bool(true),
     g_type = Grant.putAckType,
-    client_xact_id = io.nasti.b.bits.id,
+    client_xact_id = put_id_mapper.io.resp.tl_id,
     manager_xact_id = UInt(0),
     addr_beat = UInt(0),
     data = Bits(0))
+  assert(!gnt_arb.io.in(1).valid || put_id_mapper.io.resp.matches, "NASTI tag error")
 
   assert(!io.nasti.r.valid || io.nasti.r.bits.resp === UInt(0), "NASTI read error")
   assert(!io.nasti.b.valid || io.nasti.b.bits.resp === UInt(0), "NASTI write error")
@@ -590,13 +666,7 @@ class TileLinkIONastiIOConverter(implicit p: Parameters) extends TLModule()(p)
   def nasti_wmask(aw: NastiWriteAddressChannel, w: NastiWriteDataChannel): UInt = {
     val base = w.strb & size_mask(aw.size)
     val addr_byte = nasti_addr_byte(aw)
-    base << addr_byte
-  }
-
-  def nasti_wdata(aw: NastiWriteAddressChannel, w: NastiWriteDataChannel): UInt = {
-    val base = w.data & FillInterleaved(8, size_mask(aw.size))
-    val addr_byte = nasti_addr_byte(aw)
-    base << Cat(addr_byte, UInt(0, 3))
+    w.strb & (size_mask(aw.size) << addr_byte)
   }
 
   def tl_last(gnt: GrantMetadata): Bool =
@@ -651,7 +721,7 @@ class TileLinkIONastiIOConverter(implicit p: Parameters) extends TLModule()(p)
       client_xact_id = aw_req.id,
       addr_block = nasti_addr_block(aw_req),
       addr_beat = nasti_addr_beat(aw_req),
-      data = nasti_wdata(aw_req, io.nasti.w.bits),
+      data = io.nasti.w.bits.data,
       wmask = nasti_wmask(aw_req, io.nasti.w.bits)))
 
   io.tl.acquire.bits := Mux(state === s_put, put_acquire, get_acquire)
@@ -661,19 +731,7 @@ class TileLinkIONastiIOConverter(implicit p: Parameters) extends TLModule()(p)
   io.nasti.aw.ready := (state === s_idle && !io.nasti.ar.valid)
   io.nasti.w.ready  := (state === s_put && io.tl.acquire.ready)
 
-  val acq = io.tl.acquire.bits
   val nXacts = tlMaxClientXacts * tlMaxClientsPerPort
-  val get_align = Reg(Vec(nXacts, UInt(width = tlByteAddrBits)))
-  val is_narrow_get = acq.a_type === Acquire.getType
-
-  when (io.tl.acquire.fire() && is_narrow_get) {
-    get_align(acq.client_xact_id) := acq.addr_byte()
-  }
-
-  def tl_data(gnt: Grant): UInt =
-    Mux(gnt.g_type === Grant.getDataBeatType,
-      gnt.data >> Cat(get_align(gnt.client_xact_id), UInt(0, 3)),
-      gnt.data)
 
   io.nasti.b.valid := io.tl.grant.valid && tl_b_grant(io.tl.grant.bits)
   io.nasti.b.bits := NastiWriteResponseChannel(
@@ -682,7 +740,7 @@ class TileLinkIONastiIOConverter(implicit p: Parameters) extends TLModule()(p)
   io.nasti.r.valid := io.tl.grant.valid && !tl_b_grant(io.tl.grant.bits)
   io.nasti.r.bits := NastiReadDataChannel(
     id = io.tl.grant.bits.client_xact_id,
-    data = tl_data(io.tl.grant.bits),
+    data = io.tl.grant.bits.data,
     last = tl_last(io.tl.grant.bits))
 
   io.tl.grant.ready := Mux(tl_b_grant(io.tl.grant.bits),
@@ -1034,9 +1092,6 @@ class TileLinkIONarrower(innerTLId: String, outerTLId: String)
       data = gnt_data_buffer.toBits)(innerConfig)
 
     val smallget_grant = ognt.g_type === Grant.getDataBeatType
-    val get_grant_align = io.out.grant.bits.addr_beat(
-      innerByteAddrBits - outerByteAddrBits - 1, 0)
-    val get_grant_shift = Cat(get_grant_align, UInt(0, outerByteAddrBits + 3))
 
     val get_grant = Grant(
       is_builtin_type = Bool(true),
@@ -1044,7 +1099,7 @@ class TileLinkIONarrower(innerTLId: String, outerTLId: String)
       client_xact_id = ognt.client_xact_id,
       manager_xact_id = ognt.manager_xact_id,
       addr_beat = ognt.addr_beat >> UInt(log2Up(factor)),
-      data = ognt.data << get_grant_shift)(innerConfig)
+      data = Fill(factor, ognt.data))(innerConfig)
 
     io.in.grant.valid := sending_get || (io.out.grant.valid && !ognt_block)
     io.out.grant.ready := !sending_get && (ognt_block || io.in.grant.ready)
